@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/cn'
 import { Squircle } from '@/components/Squircle'
 
@@ -54,27 +54,30 @@ type AddressBottomSheetProps = {
 const sheetEaseOpen = 'cubic-bezier(0.22, 1.22, 0.42, 1)'
 const sheetEaseClose = 'cubic-bezier(0.32, 0.72, 0, 1)'
 
+type SecondaryView = 'menu' | 'confirm-delete'
+type SecondaryState = { view: SecondaryView; addressId: string } | null
+
 export function AddressBottomSheet({ open, onClose }: AddressBottomSheetProps) {
   const [tab, setTab] = useState<ToggleOption>('address')
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string>('work')
-  const [actionMenuFor, setActionMenuFor] = useState<string | null>(null)
-  const [deleteConfirmFor, setDeleteConfirmFor] = useState<string | null>(null)
+  const [secondary, setSecondary] = useState<SecondaryState>(null)
   const [tabSqueezing, setTabSqueezing] = useState(false)
   const [addressList, setAddressList] = useState<AddressItem[]>(initialAddresses)
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const deleteTarget = addressList.find((a) => a.id === deleteConfirmFor) ?? null
+  const secondaryTarget =
+    secondary !== null ? addressList.find((a) => a.id === secondary.addressId) ?? null : null
 
   const confirmDelete = () => {
-    const target = deleteConfirmFor
-    if (!target) return
-    setDeleteConfirmFor(null)
+    if (!secondary) return
+    const target = secondary.addressId
+    setSecondary(null)
     setDeletingId(target)
     window.setTimeout(() => {
       setAddressList((prev) => prev.filter((a) => a.id !== target))
       setDeletingId(null)
-    }, 320)
+    }, 420)
   }
 
   const changeTab = (next: ToggleOption) => {
@@ -190,29 +193,23 @@ export function AddressBottomSheet({ open, onClose }: AddressBottomSheetProps) {
                 isSelected={selectedId === a.id}
                 isDeleting={deletingId === a.id}
                 onSelect={() => setSelectedId(a.id)}
-                onMore={() => setActionMenuFor(a.id)}
+                onMore={() => setSecondary({ view: 'menu', addressId: a.id })}
               />
             ))}
           </div>
         </div>
+
+        <SecondarySheet
+          view={secondary?.view ?? null}
+          target={secondaryTarget}
+          onClose={() => setSecondary(null)}
+          onShowDeleteConfirm={() =>
+            setSecondary((prev) => (prev ? { ...prev, view: 'confirm-delete' } : null))
+          }
+          onConfirmDelete={confirmDelete}
+        />
       </SheetShell>
 
-      <ActionMenuSheet
-        open={actionMenuFor !== null}
-        onClose={() => setActionMenuFor(null)}
-        onDelete={() => {
-          const target = actionMenuFor
-          setActionMenuFor(null)
-          setDeleteConfirmFor(target)
-        }}
-      />
-
-      <DeleteConfirmSheet
-        open={deleteConfirmFor !== null}
-        target={deleteTarget}
-        onCancel={() => setDeleteConfirmFor(null)}
-        onConfirm={confirmDelete}
-      />
     </>
   )
 }
@@ -226,7 +223,11 @@ type SheetShellProps = {
   showNotch?: boolean
   insetClass?: string
   bottomSpacerClass?: string
+  bottomOffsetClass?: string
   onDragClose?: () => void
+  /** 'slide' (default) slides up from below the viewport.
+   *  'scale' grows in place — used for secondary sheets that emerge from inside the main sheet. */
+  enterMode?: 'slide' | 'scale'
 }
 
 function SheetShell({
@@ -238,7 +239,9 @@ function SheetShell({
   showNotch = true,
   insetClass = 'left-3 right-3',
   bottomSpacerClass = 'h-[34px]',
+  bottomOffsetClass = 'bottom-0',
   onDragClose,
+  enterMode = 'slide',
 }: SheetShellProps) {
   const dragStartY = useRef<number | null>(null)
   const draggingRef = useRef(false)
@@ -280,33 +283,43 @@ function SheetShell({
     setStretchPx(0)
   }
 
-  const transform = !open
+  const slideTransform = !open
     ? 'translateY(110%)'
     : `translateY(${dragOffset}px)`
+  const scaleTransform = !open ? 'scale(0)' : 'scale(1)'
+  const transform = enterMode === 'scale' ? scaleTransform : slideTransform
+  const opacity = enterMode === 'scale' ? (open ? 1 : 0) : 1
 
   return (
     <div
-      className={cn('absolute bottom-0', insetClass, zClass)}
+      className={cn('absolute', bottomOffsetClass, insetClass, zClass)}
       style={{
         transform,
+        opacity,
+        // For 'scale' mode, anchor at the bottom edge so the sheet grows
+        // upward from the bottom of the main sheet (since both share the same
+        // bottom anchor inside the clipped main-sheet container).
+        transformOrigin: 'center bottom',
         transition: draggingRef.current
           ? 'none'
-          : `transform 420ms ${open ? sheetEaseOpen : sheetEaseClose}`,
+          : enterMode === 'scale'
+            ? `transform 540ms ${sheetEaseOpen}, opacity 320ms ease-out`
+            : `transform 520ms ${open ? sheetEaseOpen : sheetEaseClose}`,
       }}
     >
       {showNotch ? (
         <div
-          className="flex touch-none justify-center py-1.5"
+          className="flex touch-none justify-center py-2"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
         >
-          <img src="/icons/notch.svg" alt="" className="h-1 w-9" draggable={false} />
+          <span className="block h-[5px] w-10 rounded-full bg-neutral-white/90" />
         </div>
       ) : null}
       <div
-        className={cn('rounded-[24px]', bgClass)}
+        className={cn('relative overflow-hidden rounded-[24px]', bgClass)}
         style={borderColor ? { boxShadow: `0 0 0 1px ${borderColor}` } : undefined}
       >
         {children}
@@ -371,10 +384,11 @@ function AddressCard({ item, isSelected, isDeleting = false, onSelect, onMore }:
       }}
     >
       <div
-        className="transition-all duration-[320ms] ease-out"
         style={{
-          transform: isDeleting ? 'translateX(-110%)' : 'translateX(0)',
+          transform: isDeleting ? 'scale(0.92)' : 'scale(1)',
           opacity: isDeleting ? 0 : 1,
+          transition:
+            'transform 420ms cubic-bezier(0.32, 0.72, 0, 1), opacity 380ms ease-out',
         }}
       >
     <Squircle
@@ -480,10 +494,12 @@ function AddressCard({ item, isSelected, isDeleting = false, onSelect, onMore }:
   )
 }
 
-type ActionMenuSheetProps = {
-  open: boolean
+type SecondarySheetProps = {
+  view: SecondaryView | null
+  target: AddressItem | null
   onClose: () => void
-  onDelete: () => void
+  onShowDeleteConfirm: () => void
+  onConfirmDelete: () => void
 }
 
 const actionMenuItems: { id: 'edit' | 'share' | 'verify' | 'delete'; icon: string; label: string }[] = [
@@ -493,7 +509,35 @@ const actionMenuItems: { id: 'edit' | 'share' | 'verify' | 'delete'; icon: strin
   { id: 'delete', icon: '/icons/action-delete.svg', label: 'Delete' },
 ]
 
-function ActionMenuSheet({ open, onClose, onDelete }: ActionMenuSheetProps) {
+function SecondarySheet({
+  view,
+  target,
+  onClose,
+  onShowDeleteConfirm,
+  onConfirmDelete,
+}: SecondarySheetProps) {
+  const open = view !== null
+  const renderedView = view ?? 'menu'
+
+  const menuRef = useRef<HTMLDivElement>(null)
+  const confirmRef = useRef<HTMLDivElement>(null)
+  const [contentHeight, setContentHeight] = useState<number | null>(null)
+
+  // Sync wrapper height to the ACTIVE variant's natural height.
+  // useLayoutEffect runs synchronously after DOM mutation but before paint, so
+  // the height is set before the user sees anything (preventing the first
+  // frame from clipping the menu's top row). ResizeObserver keeps it in sync
+  // if the content's height changes later (e.g. fonts loading, target swap).
+  useLayoutEffect(() => {
+    const el = renderedView === 'confirm-delete' ? confirmRef.current : menuRef.current
+    if (!el) return
+    const update = () => setContentHeight(el.offsetHeight)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [renderedView, target])
+
   return (
     <>
       <div
@@ -509,111 +553,133 @@ function ActionMenuSheet({ open, onClose, onDelete }: ActionMenuSheetProps) {
         bgClass="bg-neutral-white"
         borderColor="#F2F3F7"
         showNotch={false}
-        insetClass="left-[21px] right-[21px]"
+        insetClass="left-[9px] right-[9px]"
         bottomSpacerClass="h-[42px]"
+        bottomOffsetClass="bottom-2"
       >
-        <div className="flex flex-col p-4">
-          {actionMenuItems.map((item, idx) => (
-            <div key={item.id} className="flex flex-col items-center">
-              <button
-                type="button"
-                onClick={() => {
-                  if (item.id === 'delete') {
-                    onDelete()
-                  } else {
-                    onClose()
-                  }
-                }}
-                className="flex w-[82px] items-center gap-4 py-2 outline-none"
-              >
-                <span className="flex size-5 items-center justify-center">
-                  <img src={item.icon} alt="" className="h-3.5 w-3.5" />
-                </span>
-                <span className="font-primary text-[12px] font-semibold tracking-[-0.12px] text-[#262A33]">
-                  {item.label}
-                </span>
-              </button>
-              {idx < actionMenuItems.length - 1 ? (
-                <div className="my-1 w-full border-t border-dashed border-blue-gray-200" />
-              ) : null}
+        <div
+          className="relative overflow-hidden"
+          style={{
+            height: contentHeight ?? undefined,
+            transition: 'height 620ms cubic-bezier(0.32, 0.72, 0, 1)',
+          }}
+        >
+          {/* Action menu */}
+          <div
+            ref={menuRef}
+            className="absolute inset-x-0 top-0 origin-center"
+            style={{
+              opacity: renderedView === 'menu' ? 1 : 0,
+              transform:
+                renderedView === 'menu' ? 'scale(1) translateY(0)' : 'scale(0.7) translateY(-12px)',
+              pointerEvents: renderedView === 'menu' ? 'auto' : 'none',
+              transition:
+                'opacity 360ms ease-out, transform 520ms cubic-bezier(0.32, 0.72, 0, 1)',
+            }}
+          >
+            <div className="flex flex-col p-4">
+              {actionMenuItems.map((item, idx) => (
+                <div key={item.id} className="flex flex-col items-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (item.id === 'delete') {
+                        onShowDeleteConfirm()
+                      } else {
+                        onClose()
+                      }
+                    }}
+                    className="flex w-[82px] items-center gap-4 py-2 outline-none"
+                  >
+                    <span className="flex size-5 items-center justify-center">
+                      <img src={item.icon} alt="" className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="font-primary text-[12px] font-semibold tracking-[-0.12px] text-[#262A33]">
+                      {item.label}
+                    </span>
+                  </button>
+                  {idx < actionMenuItems.length - 1 ? (
+                    <div className="my-1 w-full border-t border-dashed border-blue-gray-200" />
+                  ) : null}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </SheetShell>
-    </>
-  )
-}
-
-type DeleteConfirmSheetProps = {
-  open: boolean
-  target: AddressItem | null
-  onCancel: () => void
-  onConfirm: () => void
-}
-
-function DeleteConfirmSheet({ open, target, onCancel, onConfirm }: DeleteConfirmSheetProps) {
-  return (
-    <>
-      <div
-        onClick={onCancel}
-        className={cn(
-          'absolute inset-0 z-[60] bg-black/35 transition-opacity duration-[420ms]',
-          open ? 'opacity-100' : 'pointer-events-none opacity-0',
-        )}
-      />
-      <SheetShell
-        open={open}
-        zClass="z-[70]"
-        bgClass="bg-neutral-white"
-        borderColor="#F2F3F7"
-        showNotch={false}
-        insetClass="left-[21px] right-[21px]"
-        bottomSpacerClass="h-[42px]"
-      >
-        <div className="flex flex-col gap-4 p-3">
-          <div className="flex flex-col gap-2 px-0.5">
-            <p className="font-primary text-[17px] font-bold leading-6 tracking-[-0.16px] text-blue-gray-900">
-              Delete this address?
-            </p>
-            <Squircle
-              cornerRadius={12}
-              cornerSmoothing={0.6}
-              borderColor="#F2F3F7"
-              className="bg-[#FCFCFD]"
-            >
-              <div className="flex flex-col gap-1.5 p-3">
-                <p className="font-primary text-[14px] font-semibold leading-[18px] tracking-[-0.14px] text-blue-gray-900">
-                  {target?.title ?? 'Address'}
-                </p>
-                <p className="font-primary text-[12px] leading-[14px] tracking-[-0.12px] text-blue-gray-700">
-                  {target?.address ?? ''}
-                </p>
-              </div>
-            </Squircle>
           </div>
 
-          <div className="flex items-stretch gap-3">
-            <Squircle
-              cornerRadius={12}
-              cornerSmoothing={0.6}
-              borderColor="#EAECF0"
-              className="flex-1 bg-blue-gray-100"
-              onClick={onCancel}
-            >
-              <div className="flex h-11 items-center justify-center px-6 text-[15px] font-semibold tracking-[-0.26px] text-ink">
-                Cancel
+          {/* Delete confirmation */}
+          <div
+            ref={confirmRef}
+            className="absolute inset-x-0 top-0"
+            style={{
+              opacity: renderedView === 'confirm-delete' ? 1 : 0,
+              pointerEvents: renderedView === 'confirm-delete' ? 'auto' : 'none',
+              transition: 'opacity 320ms ease-out 80ms',
+            }}
+          >
+            <div className="flex flex-col gap-4 p-3">
+              {/* Top section — drops in from above */}
+              <div
+                className="flex flex-col gap-2 px-0.5"
+                style={{
+                  transform:
+                    renderedView === 'confirm-delete' ? 'translateY(0)' : 'translateY(-32px)',
+                  transition:
+                    'transform 560ms cubic-bezier(0.32, 0.72, 0, 1) 120ms',
+                }}
+              >
+                <p className="font-primary text-[17px] font-bold leading-6 tracking-[-0.16px] text-blue-gray-900">
+                  Delete this address?
+                </p>
+                <Squircle
+                  cornerRadius={12}
+                  cornerSmoothing={0.6}
+                  borderColor="#F2F3F7"
+                  className="bg-[#FCFCFD]"
+                >
+                  <div className="flex flex-col gap-1.5 p-3">
+                    <p className="font-primary text-[14px] font-semibold leading-[18px] tracking-[-0.14px] text-blue-gray-900">
+                      {target?.title ?? 'Address'}
+                    </p>
+                    <p className="font-primary text-[12px] leading-[14px] tracking-[-0.12px] text-blue-gray-700">
+                      {target?.address ?? ''}
+                    </p>
+                  </div>
+                </Squircle>
               </div>
-            </Squircle>
-            <Squircle
-              cornerRadius={12}
-              cornerSmoothing={0.6}
-              className="flex-1 bg-red-700"
-              onClick={onConfirm}
-            >
-              <div className="flex h-11 items-center justify-center px-6 text-[15px] font-semibold tracking-[-0.26px] text-neutral-white">
-                Yes
+
+              {/* Bottom CTAs — rise up from below */}
+              <div
+                className="flex items-stretch gap-3"
+                style={{
+                  transform:
+                    renderedView === 'confirm-delete' ? 'translateY(0)' : 'translateY(32px)',
+                  transition:
+                    'transform 560ms cubic-bezier(0.32, 0.72, 0, 1) 120ms',
+                }}
+              >
+                <Squircle
+                  cornerRadius={12}
+                  cornerSmoothing={0.6}
+                  borderColor="#EAECF0"
+                  className="flex-1 bg-blue-gray-100"
+                  onClick={onClose}
+                >
+                  <div className="flex h-11 items-center justify-center px-6 text-[15px] font-semibold tracking-[-0.26px] text-ink">
+                    Cancel
+                  </div>
+                </Squircle>
+                <Squircle
+                  cornerRadius={12}
+                  cornerSmoothing={0.6}
+                  className="flex-1 bg-red-700"
+                  onClick={onConfirmDelete}
+                >
+                  <div className="flex h-11 items-center justify-center px-6 text-[15px] font-semibold tracking-[-0.26px] text-neutral-white">
+                    Yes
+                  </div>
+                </Squircle>
               </div>
-            </Squircle>
+            </div>
           </div>
         </div>
       </SheetShell>
